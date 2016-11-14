@@ -1,8 +1,4 @@
 ﻿using System;
-//using System.Collections.Generic;
-//using System.Linq;
-//using System.Text;
-//using System.Threading.Tasks;
 using System.Xml;
 using System.IO;
 using System.Collections.Generic;
@@ -29,6 +25,7 @@ namespace BPPCell_KML_Converter
         static void Main(string[] args)
         {
             // Check if args are valid
+            // If args are invalid or the user requests help, print the help text and exit the program
             if (args.Length == 0 || args.Length > 3 || CheckArgsForHelp(args))
             {
                 Console.WriteLine(HELP_TEXT);
@@ -112,7 +109,7 @@ namespace BPPCell_KML_Converter
 
 
         /// <summary>
-        /// CHecks if the args array contains a help flag
+        /// Checks if the args array contains a help flag
         /// </summary>
         /// <returns>
         /// True if args contains a help flag, false otherwise.
@@ -126,6 +123,13 @@ namespace BPPCell_KML_Converter
                 || argsList.Contains("-H") || argsList.Contains("--help"));
         }
 
+        /// <summary>
+        /// Creates the KML file corresponding to the given input fie.
+        /// </summary>
+        /// <param name="input">The <code>StreamReader</code> corresponding to the input file.</param>
+        /// <param name="output">The <code>StreamWriter</code> corresponding to the output file.</param>
+        /// <param name="startingLineNumber">The line number of the input file at which to start conversion.</param>
+        /// <param name="flightName">The name of the flight.</param>
         private static void CreateKML(StreamReader input, StreamWriter output, int startingLineNumber, string flightName)
         {
             XmlWriterSettings settings = new XmlWriterSettings();
@@ -137,9 +141,9 @@ namespace BPPCell_KML_Converter
                 writer.WriteStartElement("Document"); // Required to define shared styles
                 writer.WriteAttributeString("id", "aprs"); // Give the document an ID
 
-                WriteStyle(writer);
+                WriteStyle(writer); // Write KML style data
 
-                WritePlacemark(input, writer, startingLineNumber, flightName);
+                WritePlacemarkAndPath(input, writer, startingLineNumber, flightName); // Write the positioning data for the flight
 
                 writer.WriteEndElement(); // </Document>
                 writer.WriteEndElement(); // </kml>
@@ -147,7 +151,15 @@ namespace BPPCell_KML_Converter
             }
         }
 
-        private static void WritePlacemark(StreamReader input, XmlWriter writer, int startingLineNumber, string flightName)
+        /// <summary>
+        /// Writes the positioning date for the entire flight, including the landing site placemark and flight path.
+        /// </summary>
+        /// All data is enoded in a single placemark tag in the KML file.
+        /// <param name="input">The <code>StreamReader</code> corresponding to the input file.</param>
+        /// <param name="writer">The <code>XmlWriter</code> corresponding to the output KML file.</param>
+        /// <param name="startingLineNumber">The line number of the input file at which to start conversion.</param>
+        /// <param name="flightName">The name of the flight.</param>
+        private static void WritePlacemarkAndPath(StreamReader input, XmlWriter writer, int startingLineNumber, string flightName)
         {
             writer.WriteStartElement("Placemark");
 
@@ -162,7 +174,7 @@ namespace BPPCell_KML_Converter
 
             writer.WriteStartElement("MultiGeometry"); // Multiple geometries in this placemark (path and point)
 
-            string[] landingSiteCoords = WriteFlightPath(input, writer, startingLineNumber, extrudePath: true); // Write all the coordinates; get the landing site coordinates
+            double[] landingSiteCoords = WriteFlightPath(input, writer, startingLineNumber, extrudePathToGround: true); // Write all the coordinates; get the landing site coordinates
 
             WriteLandingSiteCoords(writer, landingSiteCoords);
 
@@ -171,8 +183,16 @@ namespace BPPCell_KML_Converter
             writer.WriteEndElement(); // </Placemark>
         }
 
-        // Returns the last line as a String array of the elements
-        private static string[] WriteFlightPath(StreamReader input, XmlWriter writer, int startingLineNumber, bool extrudePath)
+        /// <summary>
+        /// Writes the flight path data to the KML file using the given <code>XmlWriter</code>.
+        /// </summary>
+        /// <param name="input">The <code>StreamReader</code> corresponding to the input file.</param>
+        /// <param name="writer">The <code>XmlWriter</code> corresponding to the output KML file.</param>
+        /// <param name="startingLineNumber">The line number of the input file at which to start conversion.</param>
+        /// <param name="extrudePathToGround">Whether or not to extrude the path to the ground. <code>True</code> for yes, <code>False</code> for no.</param>
+        /// <returns>The last valid GPS coordinates in the flight path as the array of lat, lon, alt, for use in writing the landing site placemark.</returns>
+
+        private static double[] WriteFlightPath(StreamReader input, XmlWriter writer, int startingLineNumber, bool extrudePathToGround)
         {
 
             writer.WriteStartElement("LineString"); // Start the path
@@ -183,7 +203,7 @@ namespace BPPCell_KML_Converter
 
             // Connect path to ground
             writer.WriteStartElement("extrude");
-            writer.WriteValue(extrudePath);
+            writer.WriteValue(extrudePathToGround); // Whether or not to extrude the path to the ground
             writer.WriteEndElement(); // </extrude>
 
             // Use MSL altitudes (in m)
@@ -200,33 +220,61 @@ namespace BPPCell_KML_Converter
                 input.ReadLine();
             }
 
-            string[] currentLineParts = null;
+            string[] currentLineParts = new String[0];
+
+            // To contain GPS coordinates; format is [lat (degrees), lon (degrees), alt (meters)]
+            double[] currentCoords = new double[3];
+            double[] previousCoords = new double[3];
+
             while (input.Peek() != -1) // While there are lines to read
             {
-                string currentLine = input.ReadLine();
+                // Record the previous coordinates before reading new coordinates
+                previousCoords[0] = currentCoords[0];
+                previousCoords[1] = currentCoords[1];
+                previousCoords[2] = currentCoords[2];
+                
+                string currentLine = input.ReadLine(); // Read a line
                 char[] seperator = { ',' }; // The seperator character for CSV files
-                currentLineParts = currentLine.Split(seperator);
+                currentLineParts = currentLine.Split(seperator); // Split the line into its elements
+
+                // Extract the elements of interest
                 double lat = Double.Parse(currentLineParts[INDEX_OF_LAT_IN_LINE]);
                 double lon = Double.Parse(currentLineParts[INDEX_OF_LON_IN_LINE]);
                 double alt = Double.Parse(currentLineParts[INDEX_OF_ALT_IN_LINE]);
+
+                currentCoords[0] = lat;
+                currentCoords[1] = lon;
+                currentCoords[2] = alt;
+
                 if ((lat == 0) && (lon == 0) && (alt == 0)) // Indicates lack of GPS lock; skip this coordinate
-                    continue;
+                {
+                    // Revert to the last valid GPS coordinates
+                    currentCoords[0] = previousCoords[0];
+                    currentCoords[1] = previousCoords[1];
+                    currentCoords[2] = previousCoords[2];
+                    
+                    continue; // Skip this set of coordinates
+                }
 
                 // Write coordinate in KML format
-                writer.WriteValue(lon.ToString("00.000000")); // KML is in lon, lat format
-                writer.WriteValue(",");
-                writer.WriteValue(lat.ToString("00.000000"));
-                writer.WriteValue(",");
-                writer.WriteValue(alt.ToString("00000.0"));
-                writer.WriteValue("\r\n");
+                writer.WriteValue(FormatCoordsKML(currentCoords)); 
 
             }
             writer.WriteEndElement(); // </coordinates>
             writer.WriteEndElement(); // </LineString>
-            return currentLineParts;
+
+            foreach (double d in currentCoords)
+                Console.WriteLine(d);
+
+            return currentCoords; // Return the last valid GPS coordinates
         }
 
-        private static void WriteLandingSiteCoords(XmlWriter writer, string[] landingSiteCoords)
+        /// <summary>
+        /// Writes the landing site data to the KML file using the given <code>XmlWriter</code>.
+        /// </summary>
+        /// <param name="writer">The <code>XmlWriter</code> corresponding to the output KML file.</param>
+        /// <param name="landingSiteCoords">The landing site coordinates as the array of latitude, longitude, and altitude.</param>
+        private static void WriteLandingSiteCoords(XmlWriter writer, double[] landingSiteCoords)
         {
             writer.WriteStartElement("Point");
 
@@ -235,15 +283,18 @@ namespace BPPCell_KML_Converter
             writer.WriteValue("absolute");
             writer.WriteEndElement(); // </altitudeMode>
 
+            // Write the landing site coordinates
             writer.WriteStartElement("coordinates");
-            string coordToWrite = landingSiteCoords[INDEX_OF_LON_IN_LINE] // The coordinate in KML format; lon before lat
-                    + ',' + landingSiteCoords[INDEX_OF_LAT_IN_LINE]
-                    + ',' + landingSiteCoords[INDEX_OF_ALT_IN_LINE];
-            writer.WriteString(coordToWrite);
+            writer.WriteValue(FormatCoordsKML(landingSiteCoords));
+
             writer.WriteEndElement(); // </Point>
 
         }
 
+        /// <summary>
+        /// Writes style information to the KML file using the given <code>XmlWriter</code>.
+        /// </summary>
+        /// <param name="writer">The <code>XmlWriter</code> corresponding to the output KML file.</param>
         private static void WriteStyle(XmlWriter writer)
         {
             writer.WriteStartElement("Style");
@@ -273,6 +324,31 @@ namespace BPPCell_KML_Converter
             writer.WriteEndElement(); // </PolyStyle>
 
             writer.WriteEndElement(); // </Style>
+        }
+
+        /// <summary>
+        /// Formats given GPS coordinates into a string for writing to a KML file.
+        /// </summary>
+        /// <param name="coords">The GPS coordinates to write, in [lat (degrees), lon(degrees), alt (meters)].</param>
+        /// <returns>A string containing the given GPS coordinates in a format suitable for writing to a KML file.</returns>
+        private static string FormatCoordsKML(double[] coords)
+        {
+            // Extract the elements from the array
+            double lat = coords[0];
+            double lon = coords[1];
+            double alt = coords[2];
+
+            // Construct the return string
+            string returnString = "";
+            returnString += lon.ToString("00.000000"); // KML is in lon, lat format
+            returnString += ",";
+            returnString += lat.ToString("00.000000");
+            returnString += ",";
+            returnString += alt.ToString("00000.0");
+            returnString += "\r\n";
+
+            return returnString;
+
         }
     }
 }
